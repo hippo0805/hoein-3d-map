@@ -1,0 +1,14 @@
+# 로컬 환경
+.venv/
+__pycache__/
+.DS_Store
+.worktrees/
+
+# 원본 자료(대용량·외부 출처) — 저장소에 올리지 않음
+data/
+
+# 렌더 확인용 스크린샷·네이버 비교 캡처(약관상 비공개)
+.playwright-mcp/
+
+# 내부 작업 기록
+note/

@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>회인면 3D 지도</title>
+<style>
+/*__TOKENS__*/
+:root{--paper:#ece6dc;--glass:rgba(255,255,255,.86)}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;background:var(--paper);font-family:var(--font);color:var(--fg-neutral)}
+#view{position:fixed;inset:0}
+#labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}
+.lb{position:absolute;transform:translate(-50%,-100%);font-size:15px;font-weight:700;white-space:nowrap;
+  color:var(--gray-1000);background:rgba(255,255,255,.82);border-radius:6px;padding:1px 7px;
+  box-shadow:0 1px 3px rgba(0,0,0,.12)}
+body.night .lb{background:rgba(26,28,32,.8);color:#fff}
+.panel{position:fixed;background:var(--glass);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(0,0,0,.06);border-radius:14px;box-shadow:0 6px 24px rgba(0,0,0,.10)}
+.brand{top:20px;left:20px;padding:16px 20px;max-width:360px}
+.brand .k{font-size:15px;font-weight:700;color:var(--fg-brand);letter-spacing:.02em}
+.brand h1{font-size:26px;font-weight:800;letter-spacing:-.02em;margin:4px 0 6px}
+.brand p{font-size:15px;color:var(--fg-muted);line-height:1.55}
+.seg{display:flex;gap:4px;padding:4px}
+.seg button{font:inherit;font-size:15px;font-weight:700;border:0;border-radius:10px;padding:8px 14px;cursor:pointer;
+  background:transparent;color:var(--fg-muted)}
+.seg button[aria-pressed="true"]{background:var(--fg-brand);color:#fff}
+#time{top:20px;right:20px;width:300px;padding:14px 16px}
+#time .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+#time output{font-size:26px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+#time input[type=date]{font:inherit;font-size:15px;border:1px solid rgba(0,0,0,.12);border-radius:8px;padding:4px 6px;background:#fff;color:var(--fg-neutral)}
+#time input[type=range]{width:100%;margin:10px 0 4px;accent-color:var(--fg-brand)}
+#time .sun{font-size:15px;color:var(--fg-muted)}
+#time button{font:inherit;font-size:15px;font-weight:700;border:0;border-radius:8px;padding:5px 10px;cursor:pointer;background:var(--fg-brand);color:#fff}
+#views{bottom:20px;left:50%;transform:translateX(-50%)}
+.legend{bottom:20px;left:20px;padding:12px 16px;font-size:15px;line-height:1.8}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:8px;vertical-align:-1px}
+#info{top:200px;right:20px;width:300px;padding:16px 18px;display:none}
+#info.on{display:block}
+#info .t{font-size:18px;font-weight:800;margin-bottom:8px;padding-right:24px}
+#info dl{display:grid;grid-template-columns:78px 1fr;gap:4px 10px;font-size:15px;line-height:1.5}
+#info dt{color:var(--fg-subtle);font-weight:700}
+#info .x{position:absolute;top:10px;right:12px;border:0;background:none;font-size:20px;cursor:pointer;color:var(--fg-subtle)}
+.est{color:var(--fg-warning);font-weight:700}
+.hint{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);font-size:15px;color:var(--fg-muted);white-space:nowrap;
+  background:var(--glass);border-radius:999px;padding:3px 12px}
+@media(max-width:760px){
+  .brand{top:12px;left:12px;right:12px;max-width:none;padding:12px 14px}
+  .brand h1{font-size:21px}
+  #time{top:auto;bottom:76px;left:12px;right:12px;width:auto}
+  #views{bottom:16px}
+  .legend,.hint{display:none}
+  #info{top:auto;bottom:130px;left:12px;right:12px;width:auto}
+}
+</style>
+<script type="importmap">{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+</head><body>
+<div id="view"></div><div id="labels"></div>
+
+<header class="panel brand">
+  <div class="k">충북 보은군 · 시안 v0.6</div>
+  <h1>회인면 3D 지도</h1>
+  <p>면사무소가 있는 중앙리와 둘레 마을 건물 <b id="n-total"></b>동과 실제 지형·도로·논밭. 건물을 누르면 용도·층수가 나옵니다.</p>
+</header>
+
+<div class="panel" id="time" role="group" aria-label="날짜와 시각">
+  <div class="row"><output id="clock" for="hour">12:00</output><input type="date" id="date" aria-label="날짜"></div>
+  <input type="range" id="hour" min="0" max="24" step="0.25" value="12" aria-label="시각">
+  <div class="row"><span class="sun" id="sun-txt"></span><button id="play" aria-pressed="false">▶ 하루</button></div>
+</div>
+<div class="panel seg" id="views" role="group" aria-label="시점">
+  <button data-view="center" aria-pressed="true">면소재지</button><button data-view="all" aria-pressed="false">전체</button>
+</div>
+
+<aside class="panel" id="info" aria-live="polite"><button class="x" aria-label="닫기">×</button><div class="t"></div><dl></dl></aside>
+
+<div class="panel legend">
+  <div><i style="background:#bd7356"></i>공공·교육·마을 시설</div>
+  <div><i style="background:#d6c3a2"></i>주거</div>
+  <div><i style="background:#bfae96"></i>근린생활·상업</div>
+  <div><i style="background:#a7ad8f"></i>창고·축사·농업</div>
+  <div><i style="background:#c8c3ba"></i>기타·용도 없음</div>
+  <div><i style="background:#8e8a84"></i>도로 · <i style="background:#c9c4bb;margin-left:4px"></i>포장면</div>
+  <div><i style="background:#86b6d0"></i>수면 · <i style="background:#b6cf9c;margin-left:4px"></i>둔치</div>
+  <div><i style="background:#86a872"></i>숲(경사로 추정)</div>
+  <div><i style="background:#c3d39a"></i>논 · <i style="background:#ddd5a9;margin-left:4px"></i>밭 · <i style="background:#abc184;margin-left:4px"></i>과수원</div>
+  <div><i style="background:#8e877c;height:4px"></i>옹벽·담장 · <i style="background:#c9c3b8;margin-left:4px"></i>교량</div>
+</div>
+<div class="hint">드래그 이동 · 오른쪽 드래그 회전 · 스크롤 확대</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { MapControls } from 'three/addons/controls/MapControls.js';
+
+const B = __DATA__;
+const G = __GROUND__;
+const STATS = __STATS__;
+document.getElementById('n-total').textContent = STATS.total.toLocaleString();
+
+// ── 장면 ─────────────────────────────────────────────
+const el = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+el.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 5, 12000);
+const controls = new MapControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = 1.25;
+controls.minDistance = 90;
+controls.maxDistance = 4200;
+
+const hemi = new THREE.HemisphereLight(0xfff6e8, 0xb9ad98, 1.1);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff0da, 2.4);
+sun.position.set(-520, 900, 420);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -1300, right: 1300, top: 1300, bottom: -1300, near: 10, far: 3000 });
+sun.shadow.bias = -0.0004;
+sun.target.position.set(0, 0, -200);
+scene.add(sun, sun.target);
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000),
+  new THREE.MeshStandardMaterial({ color: 0xe3dccf, roughness: 1 }));
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.5;                      // 지형 격자 바깥 바닥 (지형 최저점 바로 아래)
+ground.receiveShadow = true;
+scene.add(ground);
+
+const ROAD = 0x8e8a84, PAVED = '#c9c4bb';           // 도로(입체) · 포장면(지면 그림)
+const hash = (i) => { const n = Math.sin(i * 127.1) * 43758.5; return n - Math.floor(n); };
+
+// ── 지형 (수치지도 등고선·표고점 → 10m 격자, 높이는 최저점 기준 m) ─────────
+const { x0, y0, cell, nx, ny } = G.grid;
+const W = (nx - 1) * cell, D = (ny - 1) * cell;
+const hAt = (i, j) => G.grid.h[j * nx + i] / 10;
+function heightAt(x, y) {                      // 도면 좌표 (x=동, y=북) → 지면 높이
+  const fx = Math.min(Math.max((x - x0) / cell, 0), nx - 1.001), fy = Math.min(Math.max((y - y0) / cell, 0), ny - 1.001);
+  const i = Math.floor(fx), j = Math.floor(fy), a = fx - i, b = fy - j;
+  return (hAt(i, j) * (1 - a) + hAt(i + 1, j) * a) * (1 - b) + (hAt(i, j + 1) * (1 - a) + hAt(i + 1, j + 1) * a) * b;
+}
+
+// 지면 그림: 도로·보도·운동장·물을 캔버스 한 장에 그려 지형에 입힌다 (경사에서 뜨거나 묻히지 않게)
+const PX = 2048 / W;                           // 1m 당 픽셀
+const cv = document.createElement('canvas'); cv.width = Math.round(W * PX); cv.height = Math.round(D * PX);
+const g2 = cv.getContext('2d');
+const toPx = ([x, y]) => [(x - x0) * PX, (D - (y - y0)) * PX];
+function fillPolys(list, color) {
+  g2.fillStyle = color;
+  for (const parts of list) {
+    g2.beginPath();
+    for (const ring of parts) ring.forEach((p, k) => g2[k ? 'lineTo' : 'moveTo'](...toPx(p)));
+    g2.fill('evenodd');
+  }
+}
+function strokeLines(list, color, widthM) {
+  g2.strokeStyle = color; g2.lineWidth = Math.max(1, widthM * PX); g2.lineJoin = g2.lineCap = 'round';
+  for (const line of list) { g2.beginPath(); line.forEach((p, k) => g2[k ? 'lineTo' : 'moveTo'](...toPx(p))); g2.stroke(); }
+}
+function strokePolys(list, color, widthM) {       // 면의 둘레를 굵게 — 하천 둔치
+  strokeLines(list.flat(), color, widthM);
+}
+
+// 숲: 수치지도에 산림 레이어가 없어 지형으로 추정 — 경사 8% 넘는 곳, 또는 최저점보다 60m 넘게 높은 곳.
+// 도로·밭·건물은 이 위에 덧칠되므로 결과적으로 "경사진 미개발지"만 초록으로 남는다.
+const FOREST = '#86a872';
+const mask = document.createElement('canvas'); mask.width = nx; mask.height = ny;
+const mg = mask.getContext('2d'), md = mg.createImageData(nx, ny);
+const forestAt = new Float32Array(nx * ny);
+for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+  const sx = (hAt(i + 1, j) - hAt(i - 1, j)) / (2 * cell), sy = (hAt(i, j + 1) - hAt(i, j - 1)) / (2 * cell);
+  const slope = Math.hypot(sx, sy), high = hAt(i, j) > 60 ? 1 : 0;
+  const a = Math.max(high, Math.min(1, Math.max(0, (slope - 0.06) / 0.05)));
+  forestAt[j * nx + i] = a;
+  const o = ((ny - 1 - j) * nx + i) * 4;             // 캔버스 위쪽 = 북
+  md.data.set([0x86, 0xa8, 0x72, Math.round(a * 255)], o);
+}
+mg.putImageData(md, 0, 0);
+
+function paintLand() {                               // 땅·숲·논밭·물 — 다리 밑을 다시 칠할 때도 쓴다
+  g2.fillStyle = '#e4dfd3'; g2.fillRect(0, 0, cv.width, cv.height);
+  g2.imageSmoothingEnabled = true;
+  g2.drawImage(mask, 0, 0, cv.width, cv.height);        // 10m 격자를 부드럽게 늘려 경계를 흐린다
+  g2.fillStyle = '#6f9460';                             // 나무 그늘 점무늬
+  for (let n = 0; n < 60000; n++) {
+    const u = hash(n + .5), w = hash(n + 7.3);
+    const a = forestAt[Math.floor(w * (ny - 1)) * nx + Math.floor(u * (nx - 1))];
+    if (a < .6) continue;
+    g2.beginPath(); g2.arc(u * cv.width, (1 - w) * cv.height, (1.2 + hash(n + 3.1) * 1.8) * PX, 0, 7); g2.fill();
+  }
+  fillPolys(G.dry, '#ddd5a9');
+  fillPolys(G.paddy, '#c3d39a');
+  fillPolys(G.orchard, '#abc184');
+  fillPolys(G.marsh, '#b3cbab');
+  fillPolys(G.river, '#b6cf9c');                        // 하천 구역(둔치 포함) 위에 수면
+  fillPolys(G.surface, '#86b6d0');
+  fillPolys(G.water, '#86b6d0');
+  for (const w of [6, 3, 1.5]) strokeLines(G.stream.filter(s => s.w === w).map(s => s.p), '#86b6d0', w);
+}
+paintLand();
+fillPolys(G.sports.map(f => f.track), '#c27c62');   // 운동장: 트랙(우레탄) + 필드(잔디)
+fillPolys(G.sports.map(f => f.pitch), '#8db36f');
+fillPolys(G.stair, '#cbc5bb');
+fillPolys(G.road, PAVED);                              // 도로면은 포장면(주차장·광장 포함)으로만 — 도로 자체는 입체 띠
+fillPolys(G.walk, '#d4cec4');
+strokeLines(G.bike, '#b86a4e', 1.2);
+// 다리·고속도로 밑: 수치지도 도로면은 위에서 본 상판을 칠한 것이다. 상판은 따로 띄워 그리므로 그 자리는
+// 원래 땅·물로 되돌린다 (밑을 지나는 일반 도로는 입체 띠로 따로 선다)
+g2.save();
+g2.beginPath();
+for (const ring of [...G.bridge.map(b => b.p[0]), ...G.hwfoot]) ring.forEach((q, k) => g2[k ? 'lineTo' : 'moveTo'](...toPx(q)));
+g2.clip('evenodd');
+paintLand();
+g2.restore();
+const groundTex = new THREE.CanvasTexture(cv);
+groundTex.colorSpace = THREE.SRGBColorSpace;
+groundTex.anisotropy = 8;
+
+const pos = new Float32Array(nx * ny * 3), uv = new Float32Array(nx * ny * 2), idx = [];
+for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+  const k = j * nx + i;
+  pos.set([x0 + i * cell, hAt(i, j), -(y0 + j * cell)], k * 3);
+  uv.set([i / (nx - 1), j / (ny - 1)], k * 2);
+  if (i < nx - 1 && j < ny - 1) idx.push(k, k + 1, k + nx, k + 1, k + nx + 1, k + nx);
+}
+const tGeo = new THREE.BufferGeometry();
+tGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+tGeo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+tGeo.setIndex(idx);
+tGeo.computeVertexNormals();
+const terrain = new THREE.Mesh(tGeo, new THREE.MeshStandardMaterial({ map: groundTex, roughness: 1 }));
+terrain.receiveShadow = true;
+scene.add(terrain);
+
+// 옹벽·담장: 선을 따라 지면에서 높이만큼 세운 얇은 벽
+const wp = [];
+for (const { p, h } of G.wall) for (let k = 0; k < p.length - 1; k++) {
+  const [ax, ay] = p[k], [bx, by] = p[k + 1], ga = heightAt(ax, ay), gb = heightAt(bx, by);
+  wp.push(ax, ga, -ay, bx, gb, -by, bx, gb + h, -by, ax, ga, -ay, bx, gb + h, -by, ax, ga + h, -ay);
+}
+const wGeo = new THREE.BufferGeometry();
+wGeo.setAttribute('position', new THREE.Float32BufferAttribute(wp, 3));
+wGeo.computeVertexNormals();
+const wallMesh = new THREE.Mesh(wGeo, new THREE.MeshStandardMaterial({ color: 0x8e877c, roughness: .95, side: THREE.DoubleSide }));
+wallMesh.castShadow = wallMesh.receiveShadow = true;
+scene.add(wallMesh);
+
+// 교량: 상판 높이 = 양 끝(교대) 지면 높이를 잇는 직선 (build_map.bridges). 상판 · 옆면 · 교각
+const DECK_T = 1.8, PIER_GAP = 30;
+const deckZ = (br, x, y) => {                        // 다리 축 위 위치 비율로 높이 보간, 지면 아래로는 안 내려간다
+  const [ax, ay] = br.a, [bx, by] = br.b, L2 = (bx - ax) ** 2 + (by - ay) ** 2;
+  const t = Math.min(1, Math.max(0, ((x - ax) * (bx - ax) + (y - ay) * (by - ay)) / L2));
+  return Math.max(br.za + (br.zb - br.za) * t, heightAt(x, y) + .3);
+};
+const dp = [], sp = [];
+for (const br of G.bridge) {
+  const ring = br.p[0].slice(0, -1);                 // 닫는 점 제외
+  const z = ring.map(([x, y]) => deckZ(br, x, y));
+  for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(ring.map(([x, y]) => new THREE.Vector2(x, y)), []))
+    for (const n of [i, k, j]) dp.push(ring[n][0], z[n], -ring[n][1]);
+  ring.forEach(([ax, ay], k) => {
+    const [bx, by] = ring[(k + 1) % ring.length], za = z[k], zb = z[(k + 1) % ring.length];
+    sp.push(ax, za, -ay, bx, zb - DECK_T, -by, bx, zb, -by, ax, za, -ay, ax, za - DECK_T, -ay, bx, zb - DECK_T, -by);
+  });
+}
+const deckGeo = new THREE.BufferGeometry();
+deckGeo.setAttribute('position', new THREE.Float32BufferAttribute(dp, 3));
+deckGeo.computeVertexNormals();
+const deck = new THREE.Mesh(deckGeo, new THREE.MeshStandardMaterial({ color: ROAD, roughness: .9, side: THREE.DoubleSide }));
+const sideGeo = new THREE.BufferGeometry();
+sideGeo.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
+sideGeo.computeVertexNormals();
+const concrete = new THREE.MeshStandardMaterial({ color: 0xc9c3b8, roughness: .9, side: THREE.DoubleSide });
+const side = new THREE.Mesh(sideGeo, concrete);
+deck.castShadow = deck.receiveShadow = side.castShadow = true;
+scene.add(deck, side);
+// 고속도로: 본선·램프 모두 띄운 연속 상판 (build_map.expressway — 꼭짓점마다 [x, y, 높이, 폭])
+const hp = [];
+for (const { p } of G.hw) {
+  const L = [], R = [];
+  p.forEach(([x, y, z, w], k) => {
+    const [ax, ay] = p[Math.max(0, k - 1)], [bx, by] = p[Math.min(p.length - 1, k + 1)];
+    const d = Math.hypot(bx - ax, by - ay) || 1, nx_ = -(by - ay) / d * w / 2, ny_ = (bx - ax) / d * w / 2;
+    L.push([x + nx_, y + ny_, z]); R.push([x - nx_, y - ny_, z]);
+  });
+  const quad = (a, b, c, d) => hp.push(...a, ...b, ...c, ...a, ...c, ...d);
+  const v = ([x, y, z], dz = 0) => [x, z + dz, -y];
+  for (let k = 0; k < p.length - 1; k++) {
+    quad(v(L[k]), v(R[k]), v(R[k + 1]), v(L[k + 1]));                                   // 윗면
+    quad(v(L[k]), v(L[k + 1]), v(L[k + 1], -DECK_T), v(L[k], -DECK_T));                 // 옆면
+    quad(v(R[k]), v(R[k], -DECK_T), v(R[k + 1], -DECK_T), v(R[k + 1]));
+  }
+  for (const k of [0, p.length - 1]) quad(v(L[k]), v(L[k], -DECK_T), v(R[k], -DECK_T), v(R[k]));   // 끝면
+}
+const hGeo = new THREE.BufferGeometry();
+hGeo.setAttribute('position', new THREE.Float32BufferAttribute(hp, 3));
+hGeo.computeVertexNormals();
+const roadMat = new THREE.MeshStandardMaterial({ color: ROAD, roughness: .9, side: THREE.DoubleSide });
+const hwMesh = new THREE.Mesh(hGeo, roadMat);
+hwMesh.castShadow = hwMesh.receiveShadow = true;
+scene.add(hwMesh);
+
+// 일반 도로: 중심선 × 도로폭 띠 (build_map.local_roads — 꼭짓점마다 [x, y, 노면 높이, 폭, 옆면 깊이]).
+// 고속도로와 같은 재질. 옆면은 지형 가장 낮은 쪽까지 내려 비탈에서도 틈이 보이지 않게 한다
+const rp = [];
+for (const { p } of G.roads) {
+  const L = [], R = [];
+  p.forEach(([x, y, z, w, b], k) => {
+    const [ax, ay] = p[Math.max(0, k - 1)], [bx, by] = p[Math.min(p.length - 1, k + 1)];
+    const d = Math.hypot(bx - ax, by - ay) || 1, ox = -(by - ay) / d * w / 2, oy = (bx - ax) / d * w / 2;
+    L.push([x + ox, y + oy, z, b]); R.push([x - ox, y - oy, z, b]);
+  });
+  const quad = (a, b, c, d) => rp.push(...a, ...b, ...c, ...a, ...c, ...d);
+  const v = ([x, y, z, b], down) => [x, down ? z - b : z, -y];
+  for (let k = 0; k < p.length - 1; k++) {
+    quad(v(L[k]), v(R[k]), v(R[k + 1]), v(L[k + 1]));
+    quad(v(L[k]), v(L[k + 1]), v(L[k + 1], 1), v(L[k], 1));
+    quad(v(R[k]), v(R[k], 1), v(R[k + 1], 1), v(R[k + 1]));
+  }
+  for (const k of [0, p.length - 1]) quad(v(L[k]), v(L[k], 1), v(R[k], 1), v(R[k]));
+}
+const rGeo = new THREE.BufferGeometry();
+rGeo.setAttribute('position', new THREE.Float32BufferAttribute(rp, 3));
+rGeo.computeVertexNormals();
+const roadMesh = new THREE.Mesh(rGeo, roadMat);
+roadMesh.castShadow = roadMesh.receiveShadow = true;
+scene.add(roadMesh);
+
+const pierGeo = new THREE.BoxGeometry(1, 1, 1);
+let piers = 0;
+for (const { p, m } of G.hw) {                       // 교각: 선을 따라 PIER_GAP 간격, 상판 밑이 지면보다 3m 넘게 뜬 곳만
+  let run = PIER_GAP / 2;
+  for (let k = 1; k < p.length; k++) {
+    const [ax, ay] = p[k - 1], [x, y, z, w] = p[k];
+    run += Math.hypot(x - ax, y - ay);
+    if (run < PIER_GAP) continue;
+    run = 0;
+    const top = z - DECK_T, g = heightAt(x, y);
+    if (top - g < 3) continue;
+    const pier = new THREE.Mesh(pierGeo, concrete);
+    pier.scale.set(2.2, top - g + 1, w * (m ? .55 : .7));
+    pier.rotation.y = Math.atan2(y - ay, x - ax);
+    pier.position.set(x, (top + g - 1) / 2, -y);
+    pier.castShadow = true;
+    scene.add(pier); piers++;
+  }
+}
+for (const br of G.bridge) {                         // 교각: 축을 따라 PIER_GAP 간격, 상판이 지면보다 3m 넘게 뜬 곳만
+  const [ax, ay] = br.a, [bx, by] = br.b, L = Math.hypot(bx - ax, by - ay);
+  for (let s = PIER_GAP / 2; s < L - PIER_GAP / 3; s += PIER_GAP) {
+    const x = ax + (bx - ax) * s / L, y = ay + (by - ay) * s / L, top = deckZ(br, x, y) - DECK_T, g = heightAt(x, y);
+    if (top - g < 3) continue;
+    const pier = new THREE.Mesh(pierGeo, concrete);
+    pier.scale.set(2.2, top - g + 1, br.w * .55);
+    pier.rotation.y = Math.atan2(by - ay, bx - ax);
+    pier.position.set(x, (top + g - 1) / 2, -y);
+    pier.castShadow = true;
+    scene.add(pier); piers++;
+  }
+}
+
+// ── 창문 무늬 (벽 UV 는 미터 단위 — 가로 4m · 세로 한 층 3.3m 반복) ─────
+function canvasTex(draw) {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  draw(c.getContext('2d'));
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(1 / 4, 1 / 3.3);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+const winTex = canvasTex(g => { g.fillStyle = '#fff'; g.fillRect(0, 0, 64, 64); g.fillStyle = '#a9b6bd'; g.fillRect(20, 22, 24, 22); });
+const litTex = canvasTex(g => { g.fillStyle = '#000'; g.fillRect(0, 0, 64, 64); g.fillStyle = '#ffd58a'; g.fillRect(20, 22, 24, 22); });
+
+// ── 색 (용도별 몇 가지 톤을 섞어 미니어처 느낌) ─────────────
+const PALETTE = {
+  public: ['#bd7356', '#b0674b', '#c98263', '#a96348'],
+  home: ['#d6c3a2', '#cbb18f', '#e0d1b3', '#c7a888'],
+  shop: ['#bfae96', '#b19f86', '#cdbca1'],
+  farm: ['#a7ad8f', '#9ca283', '#b3b89b'],
+  etc: ['#c8c3ba', '#bdb8ae'],
+};
+const kind = b => b.p ? 'public' : /주택/.test(b.u) ? 'home' : /근린|판매|숙박/.test(b.u) ? 'shop'
+  : /창고|동.식물|공장/.test(b.u) ? 'farm' : 'etc';
+const wallMats = new Map();
+function wallMat(hex, lit) {
+  const key = hex + lit;
+  if (!wallMats.has(key)) wallMats.set(key, new THREE.MeshStandardMaterial({
+    color: hex, map: winTex, roughness: .85,
+    emissive: 0xffc977, emissiveMap: lit ? litTex : null, emissiveIntensity: 0,
+  }));
+  return wallMats.get(key);
+}
+const roofMat = new THREE.MeshStandardMaterial({ color: 0x55524c, roughness: .95 });
+const roofCampus = new THREE.MeshStandardMaterial({ color: 0x5d4f47, roughness: .95 });
+const edgeMat = new THREE.LineBasicMaterial({ color: 0x3a342c, transparent: true, opacity: .28 });
+const pickMat = new THREE.MeshStandardMaterial({ color: 0xea580c, roughness: .7 });
+
+// ── 건물 ─────────────────────────────────────────────
+const meshes = [], labels = [];
+const area = r => Math.abs(r.reduce((s, p, i) => { const q = r[(i + 1) % r.length]; return s + p[0] * q[1] - q[0] * p[1]; }, 0) / 2);
+
+B.forEach((b, i) => {
+  const [outer, ...holes] = b.r;
+  const shape = new THREE.Shape(outer.map(([x, y]) => new THREE.Vector2(x, y)));
+  holes.forEach(h => shape.holes.push(new THREE.Path(h.map(([x, y]) => new THREE.Vector2(x, y)))));
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: b.h + b.e, bevelEnabled: false });   // 비탈만큼(e) 더 내려 바닥을 지면에 묻는다
+  geo.rotateX(-Math.PI / 2);                     // 도면 (x=동, y=북) → 장면 (x=동, z=남)
+  geo.translate(0, b.z, 0);                      // 바닥 = 꼭짓점 중 가장 낮은 지면
+  const pal = PALETTE[kind(b)];
+  const mats = [b.p ? roofCampus : roofMat, wallMat(pal[Math.floor(hash(i) * pal.length)], b.h > 4)];
+  const m = new THREE.Mesh(geo, mats);
+  m.castShadow = m.receiveShadow = true;
+  m.userData = { i, mats };
+  scene.add(m); meshes.push(m);
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 25), edgeMat);
+  scene.add(edges);
+
+  const name = b.n;
+  if (name && area(outer) > 60 && !labels.some(l => l.div.textContent === name)) {   // 한 시설에 여러 동이면 이름은 한 번
+    const cx = outer.reduce((s, p) => s + p[0], 0) / outer.length;
+    const cy = outer.reduce((s, p) => s + p[1], 0) / outer.length;
+    const div = document.createElement('div'); div.className = 'lb'; div.textContent = name;
+    document.getElementById('labels').appendChild(div);
+    labels.push({ div, pos: new THREE.Vector3(cx, b.z + b.e + b.h + 4, -cy) });
+  }
+});
+
+// ── 해 위치 (보은 회인면사무소, NOAA 근사식) → 그림자 방향 · 밝기 ─────────────
+const LAT = 36.494, LON = 127.595, TZ = 9;
+const RAD = Math.PI / 180;
+function sunPos(date, hour) {          // → { el: 고도°, az: 방위°(북=0, 시계방향) }
+  const doy = Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 864e5);
+  const g = 2 * Math.PI / 365 * (doy - 1 + (hour - 12) / 24);
+  const eqt = 229.18 * (0.000075 + 0.001868 * Math.cos(g) - 0.032077 * Math.sin(g) - 0.014615 * Math.cos(2 * g) - 0.040849 * Math.sin(2 * g));
+  const dec = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g) - 0.006758 * Math.cos(2 * g)
+    + 0.000907 * Math.sin(2 * g) - 0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g);
+  const ha = ((hour * 60 + eqt + 4 * LON - 60 * TZ) / 4 - 180) * RAD, lat = LAT * RAD;
+  const el = Math.asin(Math.sin(lat) * Math.sin(dec) + Math.cos(lat) * Math.cos(dec) * Math.cos(ha));
+  const az = Math.atan2(Math.sin(ha), Math.cos(ha) * Math.sin(lat) - Math.tan(dec) * Math.cos(lat)) + Math.PI;
+  return { el: el / RAD, az: az / RAD };
+}
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const mix = (a, b, t) => new THREE.Color(a).lerp(new THREE.Color(b), t);
+const DIRS = ['북', '북동', '동', '남동', '남', '남서', '서', '북서'];
+const dateIn = document.getElementById('date'), hourIn = document.getElementById('hour');
+
+function setSun() {
+  const d = dateIn.valueAsDate || new Date(), h = +hourIn.value;
+  const { el, az } = sunPos(d, h);
+  const day = smooth(-6, 8, el);                      // 시민박명(-6°) → 낮
+  const glow = Math.max(0, 1 - Math.abs(el - 2) / 9);  // 해 뜰 녘·질 녘 붉은 기운
+  const lamp = 1 - smooth(-4, 6, el);                  // 창문 불
+  if (el > 0) {                                        // 해: 실제 방향에서 비춘다 (장면 x=동, z=남)
+    const c = Math.cos(el * RAD);
+    sun.position.set(Math.sin(az * RAD) * c, Math.sin(el * RAD), -Math.cos(az * RAD) * c).multiplyScalar(1600).add(sun.target.position);
+    sun.color.copy(mix(0xff9a5a, 0xfff4e4, smooth(2, 30, el)));
+    sun.intensity = 2.6 * smooth(0, 12, el);
+    sun.castShadow = true;
+  } else {                                             // 밤: 머리 위 희미한 달빛, 그림자 없음
+    sun.position.set(-300, 1400, 300).add(sun.target.position);
+    sun.color.set(0x9fb4e0); sun.intensity = .7 * (1 - day);
+    sun.castShadow = false;
+  }
+  const bg = mix(0x2b3445, 0xece6dc, day).lerp(new THREE.Color(0xf0b28a), glow * .45);
+  scene.background = bg;
+  scene.fog = new THREE.Fog(bg, 1800, 6000);
+  hemi.color.copy(mix(0x8a9cc0, 0xfff6e8, day)); hemi.groundColor.copy(mix(0x2a2f3a, 0xb9ad98, day));
+  hemi.intensity = 1.0 + .1 * day;
+  ground.material.color.copy(mix(0x46505f, 0xe3dccf, day));
+  terrain.material.color.copy(mix(0x6a7488, 0xffffff, day));
+  wallMats.forEach(m => { m.emissiveIntensity = m.emissiveMap ? lamp : 0; });
+  document.body.classList.toggle('night', day < .45);
+  const hh = Math.floor(h) % 24, mm = Math.round((h % 1) * 60);
+  document.getElementById('clock').value = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  document.getElementById('sun-txt').textContent = el > 0
+    ? `해 고도 ${Math.round(el)}° · ${DIRS[Math.round(az / 45) % 8]}쪽` : '해 진 뒤';
+}
+let playing = false;
+const playBtn = document.getElementById('play');
+playBtn.onclick = () => { playing = !playing; playBtn.setAttribute('aria-pressed', playing); playBtn.textContent = playing ? '■ 멈춤' : '▶ 하루'; };
+dateIn.oninput = hourIn.oninput = setSun;
+
+// ── 시점 ─────────────────────────────────────────────
+const VIEWS = {   // 목표점 (x, z) · 카메라 오프셋
+  center: { t: [80, 0, 330], o: [380, 440, 480] },
+  all: { t: [0, 0, 50], o: [1100, 1500, 1500] },
+};
+let tween = null;
+function go(v, instant) {
+  const { t, o } = VIEWS[v];
+  const to = new THREE.Vector3(t[0], heightAt(t[0], -t[2]), t[2]), cam = to.clone().add(new THREE.Vector3(...o));
+  if (instant) { controls.target.copy(to); camera.position.copy(cam); }
+  else tween = { t0: performance.now(), a: [controls.target.clone(), camera.position.clone()], b: [to, cam] };
+  document.querySelectorAll('[data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === v));
+}
+
+// ── 건물 누르기 ───────────────────────────────────────
+const SRC = ['원본 높이', '층수 × 3.3m 추정', '기본값(1층) 추정', '수치지도(2025) 층수 × 3.3m 추정'];
+const info = document.getElementById('info');
+let picked = null;
+function select(m) {
+  if (picked) picked.material = picked.userData.mats;
+  picked = m;
+  if (!m) { info.classList.remove('on'); return; }
+  m.material = [m.userData.mats[0], pickMat];
+  const b = B[m.userData.i];
+  info.querySelector('.t').textContent = b.n || b.u || '건물';
+  const rows = [['용도', b.u || '정보 없음'], ['지상층수', b.f ? b.f + '층' : '정보 없음'],
+    ['높이', `${b.h}m`], ['높이 출처', `<span class="${b.s ? 'est' : ''}">${SRC[b.s]}</span>`],
+    ['모양', b.g ? '건물 대장 (수치지도에 없음)' : '수치지도 2025 (항공측량)'],
+    ['속성', b.s === 3 ? '수치지도 2025' : '건물 대장 (__SNAPSHOT__)']];
+  info.querySelector('dl').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  info.classList.add('on');
+}
+const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
+let down = null;
+renderer.domElement.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;   // 드래그는 선택 아님
+  ptr.set(e.clientX / innerWidth * 2 - 1, -e.clientY / innerHeight * 2 + 1);
+  ray.setFromCamera(ptr, camera);
+  const hit = ray.intersectObjects(meshes, false)[0];
+  select(hit ? hit.object : null);
+});
+info.querySelector('.x').onclick = () => select(null);
+document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => go(b.dataset.view));
+
+// ── 이름표 ───────────────────────────────────────────
+const v = new THREE.Vector3();
+function placeLabels() {
+  const far = camera.position.distanceTo(controls.target) > 1700;
+  for (const l of labels) {
+    v.copy(l.pos).project(camera);
+    const show = !far && v.z < 1 && Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05;
+    l.div.style.display = show ? '' : 'none';
+    if (show) l.div.style.left = (v.x + 1) / 2 * innerWidth + 'px', l.div.style.top = (1 - v.y) / 2 * innerHeight + 'px';
+  }
+}
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+{ const now = new Date();                           // 처음엔 지금 날짜·시각 (15분 단위)
+  dateIn.valueAsDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  hourIn.value = Math.round((now.getHours() + now.getMinutes() / 60) * 4) / 4; }
+setSun();
+go('center', true);
+let last = 0;
+renderer.setAnimationLoop(now => {
+  if (playing) {                                      // 하루 재생: 1초에 1시간
+    hourIn.value = (+hourIn.value + (now - (last || now)) / 1000) % 24; setSun();
+  }
+  last = now;
+  if (tween) {
+    const k = Math.min(1, (now - tween.t0) / 1400), e = k < .5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+    controls.target.lerpVectors(tween.a[0], tween.b[0], e);
+    camera.position.lerpVectors(tween.a[1], tween.b[1], e);
+    if (k === 1) tween = null;
+  }
+  controls.update();
+  placeLabels();
+  renderer.render(scene, camera);
+});
+window.__map = { ready: true, meshes: meshes.length, labels: labels.length, walls: wp.length / 18, bridges: G.bridge.length, piers, roads: G.roads.length, roadTris: rp.length / 9 };
+</script>
+</body></html>
